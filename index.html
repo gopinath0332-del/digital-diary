@@ -140,13 +140,15 @@
     <script>
         let currentDate = new Date();
         let diaryEntries = [];
+        let entriesByDate = new Map();
 
         async function fetchEntries() {
             try {
-                const response = await fetch('https://api.github.com/repos/gopinath0332-del/digital-diary/contents/diary');
+                const response = await fetch('diary/entries.json');
                 const data = await response.json();
                 if (Array.isArray(data)) {
-                    diaryEntries = data.filter(file => file.name.endsWith('.md')).map(file => file.name.replace('.md', ''));
+                    diaryEntries = data.map(entry => entry.date);
+                    entriesByDate = new Map(data.map(entry => [entry.date, entry]));
                 }
             } catch (e) {
                 console.error("Failed to fetch entries", e);
@@ -192,53 +194,144 @@
             }
         }
 
+        function escapeHtml(value) {
+            return value
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function renderInlineMarkdown(value) {
+            return escapeHtml(value)
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
+                    return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${label}</a>`;
+                });
+        }
+
+        function renderMarkdown(text) {
+            const mediaLine = /^\s*-?\s*!\[[^\]]*\]\([^)]+\)\s*$/;
+            const audioLine = /^\s*-?\s*(?:🎧\s*)?\[([^\]]+)\]\(([^)]+\.(?:ogg|mp3|wav|m4a))\)\s*$/i;
+            const lines = text
+                .split('\n')
+                .filter(line => !mediaLine.test(line) && !audioLine.test(line));
+
+            const html = [];
+            let inList = false;
+
+            function closeList() {
+                if (inList) {
+                    html.push('</ul>');
+                    inList = false;
+                }
+            }
+
+            lines.forEach(line => {
+                if (!line.trim()) {
+                    closeList();
+                    return;
+                }
+
+                const heading = line.match(/^(#{1,3})\s+(.+)$/);
+                if (heading) {
+                    closeList();
+                    const level = heading[1].length + 1;
+                    html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+                    return;
+                }
+
+                const listItem = line.match(/^\s*-\s+(.+)$/);
+                if (listItem) {
+                    if (!inList) {
+                        html.push('<ul>');
+                        inList = true;
+                    }
+                    html.push(`<li>${renderInlineMarkdown(listItem[1])}</li>`);
+                    return;
+                }
+
+                closeList();
+                html.push(`<p>${renderInlineMarkdown(line)}</p>`);
+            });
+
+            closeList();
+            return html.join('');
+        }
+
+        function resolveMediaPath(path, entryPath) {
+            if (path.startsWith('http')) {
+                return path;
+            }
+
+            if (path.startsWith('/')) {
+                return path.replace(/^\//, '');
+            }
+
+            const basePath = entryPath.split('/').slice(0, -1).join('/');
+            return `${basePath}/${path.replace(/^\.\//, '')}`;
+        }
+
+        function renderMedia(text, entryPath, mediaDiv) {
+            const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+            const audioRegex = /\[([^\]]+)\]\(([^)]+\.(?:ogg|mp3|wav|m4a))\)/gi;
+            const seen = new Set();
+            let match;
+
+            while ((match = imageRegex.exec(text)) !== null) {
+                const src = resolveMediaPath(match[2], entryPath);
+                if (seen.has(src)) continue;
+                seen.add(src);
+
+                const el = document.createElement('img');
+                el.src = src;
+                el.alt = match[1];
+                el.className = 'media-item';
+                el.onerror = () => el.style.display = 'none';
+                mediaDiv.appendChild(el);
+            }
+
+            while ((match = audioRegex.exec(text)) !== null) {
+                const src = resolveMediaPath(match[2], entryPath);
+                if (seen.has(src)) continue;
+                seen.add(src);
+
+                const audio = document.createElement('audio');
+                audio.src = src;
+                audio.controls = true;
+                audio.className = 'audio-player';
+                mediaDiv.appendChild(audio);
+            }
+        }
+
         async function showEntry(date) {
             const view = document.getElementById('entryView');
             const contentDiv = document.getElementById('displayContent');
             const dateDiv = document.getElementById('displayDate');
             const mediaDiv = document.getElementById('displayMedia');
-
-            const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/gopinath0332-del/digital-diary/master';
+            const entry = entriesByDate.get(date);
 
             view.style.display = 'block';
             dateDiv.innerText = date;
-            contentDiv.innerText = "Loading entry...";
             mediaDiv.innerHTML = '';
 
+            if (!entry) {
+                contentDiv.innerText = "No entry for this date.";
+                return;
+            }
+
+            contentDiv.innerText = "Loading entry...";
+
             try {
-                const resp = await fetch(`${GITHUB_RAW_BASE}/diary/${date}.md`);
-                const text = await resp.text();
-
-                // Parse markdown image lines: ![alt](path)
-                const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
-                const foundImages = [];
-                let match;
-                while ((match = imageRegex.exec(text)) !== null) {
-                    foundImages.push({ alt: match[1], path: match[2] });
+                const resp = await fetch(entry.path);
+                if (!resp.ok) {
+                    throw new Error(`Entry not found: ${entry.path}`);
                 }
-
-                // Strip image lines from displayed text
-                const cleanText = text
-                    .split('\n')
-                    .filter(line => !/!\[.*?\]\(.*?\)/.test(line))
-                    .join('\n')
-                    .trim();
-
-                contentDiv.innerText = cleanText;
-
-                // Render images found in the markdown
-                foundImages.forEach(({ alt, path }) => {
-                    // Paths may be absolute like /diary/images/foo.jpg or relative
-                    const src = path.startsWith('http')
-                        ? path
-                        : `${GITHUB_RAW_BASE}${path.startsWith('/') ? '' : '/'}${path}`;
-                    const el = document.createElement('img');
-                    el.src = src;
-                    el.alt = alt;
-                    el.className = 'media-item';
-                    el.onerror = () => el.style.display = 'none';
-                    mediaDiv.appendChild(el);
-                });
+                const text = await resp.text();
+                contentDiv.innerHTML = renderMarkdown(text);
+                renderMedia(text, entry.path, mediaDiv);
 
             } catch (e) {
                 contentDiv.innerText = "Could not load entry.";
