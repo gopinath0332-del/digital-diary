@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<<htmlhtml lang="en">
-<<headhead>
-    <<metameta charset="UTF-8">
-    <<metameta name="viewport" content="width=device-width, initial-scale=1.0">
-    <<titletitle>Gopi's Digital Diary</title>
-    <<stylestyle>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gopi's Digital Diary</title>
+    <style>
         :root {
             --bg-color: #fdfaf6;
             --text-color: #4a4a4a;
@@ -122,22 +122,22 @@
 
     <h1>My Digital Diary</h1>
 
-    <<divdiv class="calendar-container">
-        <<divdiv class="calendar-header">
-            <<buttonbutton onclick="changeMonth(-1)">❮</button>
-            <<hh3 id="monthYear"></h3>
-            <<buttonbutton onclick="changeMonth(1)">❯</button>
+    <div class="calendar-container">
+        <div class="calendar-header">
+            <button onclick="changeMonth(-1)">❮</button>
+            <h3 id="monthYear"></h3>
+            <button onclick="changeMonth(1)">❯</button>
         </div>
-        <<divdiv class="calendar-grid" id="calendarGrid"></div>
+        <div class="calendar-grid" id="calendarGrid"></div>
     </div>
 
-    <<divdiv class="entry-view" id="entryView">
-        <<divdiv class="entry-date" id="displayDate"></div>
-        <<divdiv class="entry-content" id="displayContent"></div>
-        <<divdiv class="media-container" id="displayMedia"></div>
+    <div class="entry-view" id="entryView">
+        <div class="entry-date" id="displayDate"></div>
+        <div class="entry-content" id="displayContent"></div>
+        <div class="media-container" id="displayMedia"></div>
     </div>
 
-    <<scriptscript>
+    <script>
         let currentDate = new Date();
         let diaryEntries = [];
 
@@ -173,7 +173,7 @@
             const firstDay = new Date(year, month, 1).getDay();
             const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-            for (let i = 0; i << first firstDay; i++) {
+            for (let i = 0; i < firstDay; i++) {
                 grid.appendChild(document.createElement('div'));
             }
 
@@ -197,26 +197,49 @@
             const contentDiv = document.getElementById('displayContent');
             const dateDiv = document.getElementById('displayDate');
             const mediaDiv = document.getElementById('displayMedia');
-            
+
+            const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/gopinath0332-del/digital-diary/master';
+
             view.style.display = 'block';
             dateDiv.innerText = date;
             contentDiv.innerText = "Loading entry...";
             mediaDiv.innerHTML = '';
 
             try {
-                const resp = await fetch(`https://raw.githubusercontent.com/gopinath0332-del/digital-diary/master/diary/${date}.md`);
+                const resp = await fetch(`${GITHUB_RAW_BASE}/diary/${date}.md`);
                 const text = await resp.text();
-                contentDiv.innerText = text;
-                
-                const images = await fetch('https://api.github.com/repos/gopinath0332-del/digital-diary/contents/images').then(r => r.json());
-                if (Array.isArray(images)) {
-                    images.forEach(img => {
-                        const el = document.createElement('img');
-                        el.src = `https://raw.githubusercontent.com/gopinath0332-del/digital-diary/master/${img.path}`;
-                        el.className = 'media-item';
-                        mediaDiv.appendChild(el);
-                    });
+
+                // Parse markdown image lines: ![alt](path)
+                const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+                const foundImages = [];
+                let match;
+                while ((match = imageRegex.exec(text)) !== null) {
+                    foundImages.push({ alt: match[1], path: match[2] });
                 }
+
+                // Strip image lines from displayed text
+                const cleanText = text
+                    .split('\n')
+                    .filter(line => !/!\[.*?\]\(.*?\)/.test(line))
+                    .join('\n')
+                    .trim();
+
+                contentDiv.innerText = cleanText;
+
+                // Render images found in the markdown
+                foundImages.forEach(({ alt, path }) => {
+                    // Paths may be absolute like /diary/images/foo.jpg or relative
+                    const src = path.startsWith('http')
+                        ? path
+                        : `${GITHUB_RAW_BASE}${path.startsWith('/') ? '' : '/'}${path}`;
+                    const el = document.createElement('img');
+                    el.src = src;
+                    el.alt = alt;
+                    el.className = 'media-item';
+                    el.onerror = () => el.style.display = 'none';
+                    mediaDiv.appendChild(el);
+                });
+
             } catch (e) {
                 contentDiv.innerText = "Could not load entry.";
             }
