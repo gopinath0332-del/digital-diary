@@ -143,17 +143,75 @@
         let entriesByDate = new Map();
 
         async function fetchEntries() {
+            const GITHUB_API_URL = 'https://api.github.com/repos/gopinath0332-del/digital-diary/contents/diary';
+            const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/gopinath0332-del/digital-diary/master/diary';
+            const isLocalFile = window.location.protocol === 'file:';
+            let filesList = [];
+            let jsonEntries = [];
+
+            // 1. Try to get list of files via GitHub API (works with CORS even on file:// protocol)
             try {
-                const response = await fetch('diary/entries.json');
-                const data = await response.json();
-                if (Array.isArray(data)) {
-                    diaryEntries = data.map(entry => entry.date);
-                    entriesByDate = new Map(data.map(entry => [entry.date, entry]));
+                const response = await fetch(GITHUB_API_URL);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (Array.isArray(data)) {
+                        filesList = data.filter(file => file.name.endsWith('.md'));
+                    }
                 }
             } catch (e) {
-                console.error("Failed to fetch entries", e);
+                console.warn("Could not fetch entries list from GitHub API", e);
             }
+
+            // 2. Try to fetch entries.json (locally if served, or from GitHub if on file://)
+            try {
+                const jsonUrl = isLocalFile 
+                    ? `${GITHUB_RAW_BASE}/entries.json` 
+                    : 'diary/entries.json';
+                const response = await fetch(jsonUrl);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (Array.isArray(data)) {
+                        jsonEntries = data;
+                    }
+                }
+            } catch (e) {
+                console.warn("Could not fetch entries.json", e);
+            }
+
+            // 3. Merge the files and the json metadata entries
+            const entriesMap = new Map();
+
+            // First, populate entries found via GitHub API files list
+            filesList.forEach(file => {
+                const date = file.name.replace('.md', '');
+                entriesMap.set(date, {
+                    date: date,
+                    path: isLocalFile ? `${GITHUB_RAW_BASE}/${file.name}` : `diary/${file.name}`
+                });
+            });
+
+            // Second, merge entries from entries.json (either locally or retrieved from GitHub)
+            jsonEntries.forEach(entry => {
+                const existing = entriesMap.get(entry.date);
+                if (existing) {
+                    entriesMap.set(entry.date, { ...existing, ...entry });
+                } else {
+                    let path = entry.path;
+                    if (!path) {
+                        path = isLocalFile 
+                            ? `${GITHUB_RAW_BASE}/${entry.date}.md` 
+                            : `diary/${entry.date}.md`;
+                    } else if (isLocalFile && !path.startsWith('http')) {
+                        path = `${GITHUB_RAW_BASE}/${path.replace('diary/', '')}`;
+                    }
+                    entriesMap.set(entry.date, { ...entry, path });
+                }
+            });
+
+            diaryEntries = Array.from(entriesMap.keys());
+            entriesByDate = entriesMap;
         }
+
 
         function renderCalendar() {
             const grid = document.getElementById('calendarGrid');
